@@ -1,24 +1,3 @@
-"""
-Subword-tokenized LLM example (tiny Transformer), using a byte-level BPE
-tokenizer, with support for growing the vocabulary when new training text
-contains tokens the model has never seen.
-
-Three main functions:
-  - initialize_model(text, path=...) -> loads model+optimizer+tokenizer from
-    `path` if a checkpoint exists; otherwise trains a fresh BPE tokenizer
-    and model from `text`
-  - train_model(model, optimizer, config, text, ...) -> trains, and (if
-    grow_vocab=True) may RETRAIN the tokenizer and RESIZE the model when new
-    text contains content the current vocabulary doesn't represent well.
-    Because of the possible resize, this returns (model, optimizer, config)
-    -- always reassign all three, not just the model.
-  - query_model(model, ...) -> generates text from a prompt
-
-Also included: save_model()/load_model() helpers for checkpointing.
-
-Requires:
-  pip install torch tokenizers --break-system-packages
-"""
 
 import os
 import torch
@@ -33,7 +12,6 @@ from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 
 
 class SubwordLLM(nn.Module):
-    """A minimal decoder-only Transformer for next-token prediction over subword tokens."""
 
     def __init__(self, vocab_size, embed_dim=128, n_heads=4, n_layers=2, block_size=64):
         super().__init__()
@@ -58,18 +36,7 @@ class SubwordLLM(nn.Module):
 
 
 def _train_tokenizer(text, vocab_size=500, min_frequency=2):
-    """Trains a byte-level BPE tokenizer on `text`.
 
-    `initial_alphabet=ByteLevelPreTokenizer.alphabet()` forces ALL 256
-    byte-level symbols into the vocab regardless of whether they appear in
-    `text`. Without this (a bug in an earlier version of this file), any
-    byte that never appeared in the training text has no id at all, and
-    with no unk_token set, tokenizer.encode() SILENTLY DROPS it -- verified:
-    encoding 'zzz $Ω 100 £ 日本語 !!!' against a tokenizer trained only on
-    "hello world..." decoded back to '      !!!', everything else deleted.
-    With the forced alphabet, every UTF-8 string round-trips correctly, even
-    through characters absent from the training corpus.
-    """
     tokenizer = Tokenizer(BPE())
     tokenizer.pre_tokenizer = ByteLevelPreTokenizer()
     tokenizer.decoder = ByteLevelDecoder()
@@ -150,14 +117,7 @@ def _grow_vocab_and_resize(model, optimizer, config, new_tokenizer,
 
 
 def save_model(model, optimizer, config, path="subword_llm.pt"):
-    """Saves model weights, optimizer state, tokenizer, block_size, and the
-    accumulated raw corpus text (needed to retrain/grow the tokenizer later).
 
-    CAVEAT: storing the full accumulated corpus text in every checkpoint
-    does not scale -- fine for a toy example, wrong for a real corpus. In a
-    real system you'd keep the dataset in its own storage and pass a path or
-    reference, not embed the raw text in the model checkpoint.
-    """
     torch.save(
         {
             "model_state": model.state_dict(),
@@ -203,11 +163,7 @@ def initialize_model(
     text, path="subword_llm.pt", tokenizer_vocab_size=500,
     embed_dim=128, n_heads=4, n_layers=2, block_size=64, lr=3e-4,
 ):
-    """Loads an existing checkpoint (model + tokenizer + seen text) from
-    `path` if one exists; otherwise trains a fresh BPE tokenizer on `text`
-    and builds a new model. Vocabulary growth for NEW text happens inside
-    train_model(), not here -- this function only decides fresh-vs-loaded.
-    """
+
     if os.path.exists(path):
         print(f"Found existing checkpoint at {path} -- loading model + "
               f"tokenizer instead of initializing new ones.")
@@ -246,23 +202,7 @@ def train_model(
     grow_vocab=True, max_vocab_size=2000,
     embed_dim=128, n_heads=4, n_layers=2, lr=3e-4,
 ):
-    """Trains the model on `text`.
 
-    If grow_vocab=True (default), this first retrains the BPE tokenizer on
-    the FULL accumulated corpus (everything ever passed to initialize_model
-    or train_model, plus this new `text`) and, if the resulting vocabulary
-    is larger, RESIZES the model to fit -- transplanting weights for tokens
-    that survive by exact string match (see _grow_vocab_and_resize's
-    docstring for the real limitations of that transplant).
-
-    Because the model/optimizer/config may be REPLACED, this function
-    returns all three: `model, optimizer, config = train_model(...)`.
-    Passing grow_vocab=True means retraining the tokenizer on every call,
-    which is wasted work for large corpora -- fine for a toy example, not
-    something you'd want in a real training loop without batching it up
-    (e.g. only re-check vocab growth every N calls, or only when you know
-    new content was added).
-    """
     if grow_vocab:
         seen_text = config.get("_seen_text", "")
         combined_text = (seen_text + "\n" + text) if seen_text else text
